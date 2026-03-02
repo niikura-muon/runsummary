@@ -4,14 +4,20 @@ The run summary is showing on the web server using ```streamlit``` and csv summa
 
 # Preparation
 ```shell
+git clone git@github.com:niikura-muon/runsummary.git
+cd runsummary
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 # Usage
 
 ```shell
-streamlit run runsummary.py
+streamlit run run_summary.py
 ```
+
+Then you can access at 'http://localhost:8501'.
 
 # Optional custom editable columns
 
