@@ -1,2 +1,20 @@
+# データベース
 runs.db
+
+# 仮想環境
 .venv/
+
+# VSCode 設定
+.vscode/
+
+# Python キャッシュ
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Mac 特有のファイル
+.DS_Store
+
+# 環境変数（秘密情報用）
+.env
