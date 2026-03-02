@@ -4,17 +4,57 @@ import sqlite3
 import os
 from datetime import datetime
 import locale
+from contextlib import contextmanager
 
 st.set_page_config(layout="wide")
 
-try:
-    locale.setlocale(locale.LC_TIME, 'ja_JP.UTF-8')
-except locale.Error as e:
-    print(f"ロケール設定エラー: {e}")
+LOCALE_CANDIDATES = {
+    "ja": ["ja_JP.UTF-8", "ja_JP", "Japanese_Japan.932"],
+    "en": ["en_US.UTF-8", "en_US", "C"]
+}
+
+FORMAT_CANDIDATES = [
+    ("ja", '%a %m月 %d %H:%M:%S %Y'),
+    ("en", '%a %b %d %H:%M:%S %Y')
+]
+
+
+@contextmanager
+def temporary_lc_time(locale_name):
+    current_locale = locale.setlocale(locale.LC_TIME)
+    try:
+        locale.setlocale(locale.LC_TIME, locale_name)
+        yield
+    finally:
+        locale.setlocale(locale.LC_TIME, current_locale)
+
+
+def set_default_time_locale():
+    for language in ["ja", "en"]:
+        for locale_name in LOCALE_CANDIDATES[language]:
+            try:
+                locale.setlocale(locale.LC_TIME, locale_name)
+                return
+            except locale.Error:
+                continue
+    print("ロケール設定エラー: 利用可能な ja/en ロケールが見つかりませんでした。")
+
+
+def parse_datetime_flexible(value):
+    for language, format_string in FORMAT_CANDIDATES:
+        for locale_name in LOCALE_CANDIDATES[language]:
+            try:
+                with temporary_lc_time(locale_name):
+                    return datetime.strptime(value, format_string)
+            except (locale.Error, ValueError):
+                continue
+    return None
+
+
+set_default_time_locale()
 
 DB_FILE = "runs.db"
 TARGET_DIR = "../DAQ/"
-FORMAT_STRING = '%a %m月 %d %H:%M:%S %Y'
 DISPLAY_FORMAT = '%Y-%m-%d %H:%M:%S'
 DB_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
@@ -33,10 +73,10 @@ def get_run_times(dir_path, info_file_path):
                 if len(lines) >= 3:
                     if lines[1].startswith("Start time = "):
                         start_str = lines[1].split("= ")[1].strip()
-                        start_time = datetime.strptime(start_str, FORMAT_STRING)
+                        start_time = parse_datetime_flexible(start_str)
                     if lines[2].startswith("Stop time = "):
                         stop_str = lines[2].split("= ")[1].strip()
-                        stop_time = datetime.strptime(stop_str, FORMAT_STRING)
+                        stop_time = parse_datetime_flexible(stop_str)
                     return start_time, stop_time, False
                 else:
                     return None, None, False
