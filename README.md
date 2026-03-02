@@ -12,3 +12,28 @@ pip install -r requirements.txt
 ```shell
 streamlit run runsummary.py
 ```
+
+# Optional custom editable columns
+
+You can add extra editable columns to the table by creating a file named `editable_columns.txt` in the same directory as `run_summary.py`.
+
+- If this file does not exist, only `Comment` is editable.
+- If this file exists, each listed field is added as an editable column.
+
+Supported formats:
+
+- One field per line
+- Comma-separated fields
+
+Example (`editable_columns.txt`):
+
+```text
+Beam
+Target
+```
+
+or
+
+```text
+Beam, Target
+```
