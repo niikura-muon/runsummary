@@ -13,8 +13,8 @@ APP_TITLE = f"Run Summary for {PROJECT_NAME}"
 
 st.set_page_config(
     page_title=APP_TITLE,
-    page_icon="🗓️",                  # 任意（絵文字や画像）
-    layout="wide"                    # 任意
+    page_icon="🗓️",
+    layout="wide"
 )
 
 LOCALE_CANDIDATES = {
@@ -26,6 +26,7 @@ FORMAT_CANDIDATES = [
     ("ja", '%a %m月 %d %H:%M:%S %Y'),
     ("en", '%a %b %d %H:%M:%S %Y')
 ]
+
 
 @contextmanager
 def temporary_lc_time(locale_name):
@@ -58,14 +59,25 @@ def parse_datetime_flexible(value):
                 continue
     return None
 
+
 set_default_time_locale()
 
-DB_FILE = "runs.db"
+DB_FILE = "run.db"
 TARGET_DIR = "../DAQ/"
 DISPLAY_FORMAT = '%Y-%m-%d %H:%M:%S'
 DB_FORMAT = '%Y-%m-%dT%H:%M:%S'
 EDITABLE_FIELDS_FILE = os.path.join(SCRIPT_DIR, "editable_columns.txt")
 BASE_COLUMNS = ['RunId', 'Start time', 'Stop time', 'Duration']
+
+
+def quote_identifier(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def get_db_column_name(display_name):
+    if display_name == 'Comment':
+        return 'comment'
+    return display_name
 
 
 def get_extra_editable_fields():
@@ -94,10 +106,12 @@ def get_extra_editable_fields():
 def get_editable_columns():
     return ['Comment'] + get_extra_editable_fields()
 
+
 def get_creation_time(dir_path):
     timestamp = os.path.getctime(dir_path)
     dt_object = datetime.fromtimestamp(timestamp)
     return dt_object.strftime(DB_FORMAT)
+
 
 def get_run_times(dir_path, info_file_path):
     if os.path.exists(info_file_path):
@@ -113,22 +127,22 @@ def get_run_times(dir_path, info_file_path):
                     if lines[2].startswith("Stop time = "):
                         stop_str = lines[2].split("= ")[1].strip()
                         stop_time = parse_datetime_flexible(stop_str)
-                    return start_time, stop_time, False
-                else:
-                    return None, None, False
+                    return start_time, stop_time
+                return None, None
         except FileNotFoundError:
-            return get_creation_time(dir_path), None, True
+            return get_creation_time(dir_path), None
         except ValueError:
-            return None, None, False
+            return None, None
         except Exception as e:
             print(f"get_run_times で予期せぬエラー: {e}")
-            return None, None, False
-    else:
-        return get_creation_time(dir_path), None, True
+            return None, None
+    return get_creation_time(dir_path), None
 
-def create_table():
+
+def create_table(editable_columns):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
@@ -137,190 +151,167 @@ def create_table():
             comment TEXT
         )
     """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS run_fields (
-            run_id TEXT,
-            field_name TEXT,
-            value TEXT,
-            PRIMARY KEY (run_id, field_name)
-        )
-    """)
+
+    cursor.execute("PRAGMA table_info(runs)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+
+    for display_column in editable_columns:
+        db_column = get_db_column_name(display_column)
+        if db_column not in existing_columns:
+            cursor.execute(
+                f"ALTER TABLE runs ADD COLUMN {quote_identifier(db_column)} TEXT"
+            )
+
     conn.commit()
     conn.close()
 
-def insert_or_update_run_info(run_id, start_time, stop_time, comment=None):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO runs (run_id, start_time, stop_time, comment)
-        VALUES (?, ?, ?, ?)
-    """, (run_id, start_time, stop_time, comment))
-    conn.commit()
-    conn.close()
 
 def update_database():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+
     for entry in os.scandir(TARGET_DIR):
-        if entry.is_dir():
-            run_id = entry.name
-            dir_path = os.path.join(TARGET_DIR, entry.name)
-            info_file_path = os.path.join(dir_path, f"{entry.name}_info.txt")
-            start_dt, stop_dt, from_creation = get_run_times(dir_path, info_file_path)
+        if not entry.is_dir():
+            continue
 
-            if start_dt:
-                start_str = start_dt.isoformat() if isinstance(start_dt, datetime) else start_dt
-                stop_str = stop_dt.isoformat() if isinstance(stop_dt, datetime) else stop_dt
+        run_id = entry.name
+        dir_path = os.path.join(TARGET_DIR, entry.name)
+        info_file_path = os.path.join(dir_path, f"{entry.name}_info.txt")
+        start_dt, stop_dt = get_run_times(dir_path, info_file_path)
 
-                # 既存のレコードを検索
-                cursor.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,))
-                existing_record = cursor.fetchone()
+        if not start_dt:
+            continue
 
-                if existing_record:
-                    # レコードが存在する場合は更新
-                    cursor.execute("""
-                        UPDATE runs
-                        SET start_time = ?, stop_time = ?
-                        WHERE run_id = ?
-                    """, (start_str, stop_str, run_id))
-                else:
-                    # レコードが存在しない場合は新規挿入 (コメントは初期値 None)
-                    cursor.execute("""
-                        INSERT INTO runs (run_id, start_time, stop_time, comment)
-                        VALUES (?, ?, ?, NULL)
-                    """, (run_id, start_str, stop_str))
+        start_str = start_dt.isoformat() if isinstance(start_dt, datetime) else start_dt
+        stop_str = stop_dt.isoformat() if isinstance(stop_dt, datetime) else stop_dt
+
+        cursor.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,))
+        existing_record = cursor.fetchone()
+
+        if existing_record:
+            cursor.execute(
+                """
+                UPDATE runs
+                SET start_time = ?, stop_time = ?
+                WHERE run_id = ?
+                """,
+                (start_str, stop_str, run_id)
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO runs (run_id, start_time, stop_time, comment)
+                VALUES (?, ?, ?, NULL)
+                """,
+                (run_id, start_str, stop_str)
+            )
 
     conn.commit()
     conn.close()
-    
-def fetch_all_runs():
+
+
+def fetch_all_runs(editable_columns):
     conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT run_id, start_time, stop_time, comment FROM runs ORDER BY start_time DESC")
-    rows = cursor.fetchall()
+
+    select_parts = [
+        'run_id AS "RunId"',
+        'start_time AS "Start time"',
+        'stop_time AS "Stop time"'
+    ]
+
+    for display_column in editable_columns:
+        db_column = get_db_column_name(display_column)
+        select_parts.append(
+            f'{quote_identifier(db_column)} AS {quote_identifier(display_column)}'
+        )
+
+    query = f"SELECT {', '.join(select_parts)} FROM runs ORDER BY start_time DESC"
+    cursor.execute(query)
+    rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
 
 
-def fetch_extra_field_values(run_ids, field_names):
-    if not run_ids or not field_names:
-        return {}
+def normalize_cell_value(value):
+    if pd.isna(value) or value is None:
+        return ""
+    return str(value)
+
+
+def save_edited_rows_to_db(edited_rows, run_id_order, editable_columns):
+    if not edited_rows or not run_id_order:
+        return 0
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    updated_count = 0
 
-    run_placeholders = ','.join(['?'] * len(run_ids))
-    field_placeholders = ','.join(['?'] * len(field_names))
-    cursor.execute(
-        f"""
-        SELECT run_id, field_name, value
-        FROM run_fields
-        WHERE run_id IN ({run_placeholders})
-          AND field_name IN ({field_placeholders})
-        """,
-        run_ids + field_names
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    for row_index, row_changes in edited_rows.items():
+        try:
+            row_index = int(row_index)
+        except (TypeError, ValueError):
+            continue
 
-    values_map = {}
-    for run_id, field_name, value in rows:
-        if run_id not in values_map:
-            values_map[run_id] = {}
-        values_map[run_id][field_name] = value
-    return values_map
+        if row_index >= len(run_id_order):
+            continue
+        run_id = run_id_order[row_index]
+        changed_columns = []
+        params = []
 
-def update_comment(run_id, comment):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    if comment is None or comment == "":
-        cursor.execute("""
-            UPDATE runs
-            SET comment = NULL
-            WHERE run_id = ?
-        """, (run_id,))
-    else:
-        cursor.execute("""
-            UPDATE runs
-            SET comment = ?
-            WHERE run_id = ?
-        """, (comment, run_id))
+        for display_column in editable_columns:
+            if display_column not in row_changes:
+                continue
+
+            new_value = normalize_cell_value(row_changes.get(display_column, ""))
+            db_column = get_db_column_name(display_column)
+            changed_columns.append(f"{quote_identifier(db_column)} = ?")
+            params.append(new_value if new_value != "" else None)
+
+        if changed_columns:
+            params.append(run_id)
+            cursor.execute(
+                f"UPDATE runs SET {', '.join(changed_columns)} WHERE run_id = ?",
+                params
+            )
+            updated_count += 1
+
     conn.commit()
     conn.close()
+    return updated_count
 
-
-def update_extra_field(run_id, field_name, value):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    if value is None or value == "":
-        cursor.execute(
-            """
-            DELETE FROM run_fields
-            WHERE run_id = ? AND field_name = ?
-            """,
-            (run_id, field_name)
-        )
-    else:
-        cursor.execute(
-            """
-            INSERT INTO run_fields (run_id, field_name, value)
-            VALUES (?, ?, ?)
-            ON CONFLICT(run_id, field_name) DO UPDATE SET value = excluded.value
-            """,
-            (run_id, field_name, value)
-        )
-    conn.commit()
-    conn.close()
 
 def handle_table_change():
-    if "run_table" in st.session_state and "edited_rows" in st.session_state["run_table"]:
-        edited_rows = st.session_state["run_table"]["edited_rows"]
-        run_id_order = st.session_state.get("run_id_order", [])
-        editable_columns = st.session_state.get("editable_columns", ['Comment'])
+    if "run_table" not in st.session_state:
+        return
 
-        if run_id_order:
-            updated = False # 更新があったかどうかを追跡
+    edited_rows = st.session_state["run_table"].get("edited_rows", {})
+    run_id_order = st.session_state.get("run_id_order", [])
+    editable_columns = st.session_state.get("editable_columns", ['Comment'])
 
-            for index, edited_data in edited_rows.items():
-                if index >= len(run_id_order):
-                    continue
-                run_id_to_update = run_id_order[index]
-                if run_id_to_update is None:
-                    continue
+    save_edited_rows_to_db(edited_rows, run_id_order, editable_columns)
 
-                for column_name in editable_columns:
-                    if column_name not in edited_data:
-                        continue
-                    value_to_update = edited_data.get(column_name)
-                    if column_name == 'Comment':
-                        update_comment(run_id_to_update, value_to_update)
-                    else:
-                        update_extra_field(run_id_to_update, column_name, value_to_update)
-                    updated = True
 
-            if updated:
-                st.session_state["table_updated"] = not st.session_state.get("table_updated", False) # 状態を更新
-
-# Streamlit アプリケーション
 if __name__ == "__main__":
-
     st.title(APP_TITLE)
 
-    create_table()
+    editable_columns = get_editable_columns()
+    create_table(editable_columns)
+    st.session_state["editable_columns"] = editable_columns
 
     if st.button("Update"):
         update_database()
-        st.session_state["data_updated"] = not st.session_state.get("data_updated", False) # 状態を更新
         st.rerun()
 
-    runs = fetch_all_runs()
-    editable_columns = get_editable_columns()
-    st.session_state["editable_columns"] = editable_columns
+    runs = fetch_all_runs(editable_columns)
 
     if runs:
-        df = pd.DataFrame(runs, columns=['RunId', 'Start time', 'Stop time', 'Comment'])
-        df['Start time'] = pd.to_datetime(df['Start time']).dt.strftime(DISPLAY_FORMAT)
-        df['Stop time'] = df['Stop time'].apply(lambda x: pd.to_datetime(x).strftime(DISPLAY_FORMAT) if pd.notna(x) else '')
+        df = pd.DataFrame(runs)
+        df['Start time'] = pd.to_datetime(df['Start time'], errors='coerce').dt.strftime(DISPLAY_FORMAT)
+        df['Stop time'] = df['Stop time'].apply(
+            lambda x: pd.to_datetime(x).strftime(DISPLAY_FORMAT) if pd.notna(x) and x else ''
+        )
 
         df['start time dt'] = pd.to_datetime(df['Start time'], errors='coerce')
         df['stop time dt'] = pd.to_datetime(df['Stop time'], errors='coerce')
@@ -331,18 +322,10 @@ if __name__ == "__main__":
         )
 
         extra_columns = [column for column in editable_columns if column != 'Comment']
-        run_ids = df['RunId'].tolist()
-        extra_values_map = fetch_extra_field_values(run_ids, extra_columns)
-
-        for column in extra_columns:
-            df[column] = df['RunId'].apply(
-                lambda run_id: extra_values_map.get(run_id, {}).get(column, '')
-            )
-
         display_columns = BASE_COLUMNS + extra_columns + ['Comment']
         df = df[display_columns]
         st.session_state["run_id_order"] = df['RunId'].tolist()
-        
+
         column_config = {
             "RunId": st.column_config.Column("RunId", width="small", disabled=True),
             "Start time": st.column_config.Column("Start time", disabled=True),
@@ -354,16 +337,12 @@ if __name__ == "__main__":
         for column in extra_columns:
             column_config[column] = st.column_config.Column(column, width="small")
 
-        edited_df = st.data_editor(
+        st.data_editor(
             df,
             key="run_table",
-            on_change=handle_table_change,
             hide_index=True,
-            column_config=column_config
+            column_config=column_config,
+            on_change=handle_table_change
         )
-
-        if "table_updated" in st.session_state:
-            pass
-
     else:
         st.info("No run information available.")

@@ -1,5 +1,5 @@
 # データベース
-runs.db
+run.db
 
 # 仮想環境
 .venv/
