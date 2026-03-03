@@ -130,17 +130,23 @@ def get_run_times(dir_path, info_file_path):
                     return start_time, stop_time
                 return None, None
         except FileNotFoundError:
-            return get_creation_time(dir_path), None
+            try:
+                return datetime.fromisoformat(get_creation_time(dir_path)), None
+            except ValueError:
+                return None, None
         except ValueError:
             return None, None
         except Exception as e:
             print(f"get_run_times で予期せぬエラー: {e}")
             return None, None
-    return get_creation_time(dir_path), None
+    try:
+        return datetime.fromisoformat(get_creation_time(dir_path)), None
+    except ValueError:
+        return None, None
 
 
 def create_table(editable_columns):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -167,7 +173,7 @@ def create_table(editable_columns):
 
 
 def update_database():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
 
     for entry in os.scandir(TARGET_DIR):
@@ -182,21 +188,23 @@ def update_database():
         if not start_dt:
             continue
 
-        start_str = start_dt.isoformat() if isinstance(start_dt, datetime) else start_dt
-        stop_str = stop_dt.isoformat() if isinstance(stop_dt, datetime) else stop_dt
+        start_str = start_dt.isoformat()
+        stop_str = stop_dt.isoformat() if stop_dt else None
 
-        cursor.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,))
+        cursor.execute("SELECT start_time, stop_time FROM runs WHERE run_id = ?", (run_id,))
         existing_record = cursor.fetchone()
 
         if existing_record:
-            cursor.execute(
-                """
-                UPDATE runs
-                SET start_time = ?, stop_time = ?
-                WHERE run_id = ?
-                """,
-                (start_str, stop_str, run_id)
-            )
+            existing_start, existing_stop = existing_record
+            if existing_start != start_str or existing_stop != stop_str:
+                cursor.execute(
+                    """
+                    UPDATE runs
+                    SET start_time = ?, stop_time = ?
+                    WHERE run_id = ?
+                    """,
+                    (start_str, stop_str, run_id)
+                )
         else:
             cursor.execute(
                 """
@@ -211,7 +219,7 @@ def update_database():
 
 
 def fetch_all_runs(editable_columns):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -244,7 +252,7 @@ def save_edited_rows_to_db(edited_rows, run_id_order, editable_columns):
     if not edited_rows or not run_id_order:
         return 0
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     updated_count = 0
 
@@ -299,6 +307,10 @@ if __name__ == "__main__":
     editable_columns = get_editable_columns()
     create_table(editable_columns)
     st.session_state["editable_columns"] = editable_columns
+
+    if "did_initial_update" not in st.session_state:
+        update_database()
+        st.session_state["did_initial_update"] = True
 
     if st.button("Update"):
         update_database()
