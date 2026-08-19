@@ -4,7 +4,7 @@ The run summary is showing on the web server using ```streamlit``` and csv summa
 
 # Preparation
 ```shell
-git clone git@github.com:niikura-muon/runsummary.git
+git clone https://github.com/niikura-muon/runsummary.git
 cd runsummary
 python3 -m venv .venv
 source .venv/bin/activate
